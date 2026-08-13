@@ -1,0 +1,4 @@
+transaction_id,product_code,customer_email,phone_number,credit_card,patient_name,ssn
+TXN-101,PRD-01,john.doe@example.com,+1-555-123-4567,4532-1234-5678-9010,Alice Smith,123-45-6789
+TXN-102,PRD-02,jane.smith@acme.org,+1-555-987-6543,5123-4567-8901-2345,Bob Jones,987-65-4321
+TXN-103,PRD-03,support@globex.net,+1-555-444-5555,3782-822463-71005,Charlie Brown,456-78-9012

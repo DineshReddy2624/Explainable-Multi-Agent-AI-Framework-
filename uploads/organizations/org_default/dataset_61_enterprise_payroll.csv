@@ -1,0 +1,12 @@
+Employee_ID,Full_Name,Email,Phone,Department,Salary,Age,Performance_Rating
+101,Alice Smith,alice@acme.com,+1-555-0101,Engineering,95000.0,34.0,4.5
+102,Bob Jones,bob@acme.com,+1-555-0102,Engineering,105000.0,42.0,4.8
+103,Charlie Brown,charlie@acme.com,+1-555-0103,Sales,72000.0,29.0,3.9
+104,Diana Prince,diana@acme.com,+1-555-0104,Sales,81000.0,31.0,4.1
+105,Evan Wright,evan@acme.com,+1-555-0105,Marketing,68000.0,,3.8
+106,Fiona Gallagher,fiona@acme.com,+1-555-0106,Marketing,,28.0,4.0
+107,George Clark,george@acme.com,+1-555-0107,HR,62000.0,45.0,4.2
+108,Hannah Abbott,hannah@acme.com,+1-555-0108,HR,64000.0,51.0,4.6
+109,Ian Malcolm,ian@acme.com,+1-555-0109,Engineering,115000.0,38.0,4.9
+110,Julia Roberts,julia@acme.com,+1-555-0110,Sales,79000.0,30.0,4.0
+110,Julia Roberts,julia@acme.com,+1-555-0110,Sales,79000.0,30.0,4.0

@@ -1,0 +1,4 @@
+transaction_id,product_code,customer_email,phone_number,credit_card,patient_name,ssn
+TXN-101,PRD-01,j*******@example.com,*******4567,************9010,A**** S****,***MASKED***
+TXN-102,PRD-02,j*********@acme.org,*******6543,************2345,B** J****,***MASKED***
+TXN-103,PRD-03,s******@globex.net,*******5555,***********1005,C****** B****,***MASKED***

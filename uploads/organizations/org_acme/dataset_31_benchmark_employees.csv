@@ -1,0 +1,11 @@
+Employee_ID,Customer_Name,Email,Department,Region,Age,Salary,Sales_Amount,Performance_Rating
+101,Alice Smith,alice@example.com,IT,North,28.0,70000,15000,4.5
+102,Bob Jones,bob@example.com,Sales,South,35.0,85000,25000,3.8
+103,Charlie Brown,charlie@example.com,IT,North,42.0,95000,18000,4.2
+104,David Miller,david@example.com,HR,West,,60000,10000,3.5
+105,Eva Green,eva@example.com,Sales,South,24.0,50000,30000,4.9
+106,Frank White,frank@example.com,IT,North,38.0,110000,42000,4.8
+107,Grace Hall,grace@example.com,Sales,East,45.0,90000,22000,3.9
+108,Henry King,henry@example.com,HR,West,55.0,65000,12000,3.6
+109,Ivy Scott,ivy@example.com,IT,East,31.0,105000,38000,4.7
+110,Jack Adams,jack@example.com,Sales,South,29.0,75000,27000,4.1
