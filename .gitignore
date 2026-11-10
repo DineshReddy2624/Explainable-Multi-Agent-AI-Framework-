@@ -66,6 +66,9 @@ backend/reports/*
 backend/vector_db/*
 !backend/vector_db/.gitkeep
 
+reports/*
+!reports/.gitkeep
+
 datasets/original/*
 !datasets/original/.gitkeep
 datasets/cleaned/*
