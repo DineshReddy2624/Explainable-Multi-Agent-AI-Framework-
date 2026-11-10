@@ -1,6 +1,20 @@
-import React from 'react';
+import React, { useContext } from 'react';
+import { DatasetContext } from '../../context/DatasetContext';
 import MetricCard from './MetricCard';
-import ExportButton from '../export/ExportButton';
+import {
+  TrendingUp,
+  AlertCircle,
+  Copy,
+  Wand2,
+  AlertTriangle,
+  BarChart3,
+  Bot,
+  User,
+  FileSpreadsheet,
+  FileText,
+  ClipboardList
+} from 'lucide-react';
+
 
 const CorrectionComparisonSuite = ({ beforeAnalysis = {}, afterAnalysis = {}, appliedLogs = [], onDownload }) => {
   const prevScore = beforeAnalysis?.quality_scores?.overall_score || 82.5;
@@ -50,12 +64,16 @@ const CorrectionComparisonSuite = ({ beforeAnalysis = {}, afterAnalysis = {}, ap
     a.click();
   };
 
+  const { openBeforeAfterReportModal } = useContext(DatasetContext) || {};
+
   return (
     <div className="space-y-8" style={{ marginTop: '2rem' }}>
+
       {/* 1. Quality Score & Metric Before vs After Comparison */}
       <div>
-        <h3 className="text-xl font-bold mb-4" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--success)' }}>
-          <span>📈</span> 1. Quality Score & Metric Comparison (Before ➔ After)
+        <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-emerald-600">
+          <TrendingUp className="w-5 h-5 text-emerald-600" />
+          <span>1. Quality Score & Metric Comparison (Before ➔ After)</span>
         </h3>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -70,17 +88,18 @@ const CorrectionComparisonSuite = ({ beforeAnalysis = {}, afterAnalysis = {}, ap
             </span>
           </div>
 
-          <MetricCard title="Missing Values" value={`${prevMissing} ➔ ${newMissing}`} icon="❓" color="var(--success)" />
-          <MetricCard title="Duplicate Records" value={`${prevDuplicates} ➔ ${newDuplicates}`} icon="📑" color="var(--success)" />
-          <MetricCard title="Format Errors" value={`${prevFormatErrs} ➔ ${newFormatErrs}`} icon="🔧" color="var(--success)" />
-          <MetricCard title="Anomalies" value={`${prevAnomalies} ➔ ${newAnomalies}`} icon="🚨" color="var(--success)" />
+          <MetricCard title="Missing Values" value={`${prevMissing} ➔ ${newMissing}`} icon={AlertCircle} color="text-emerald-600" bg="bg-emerald-50" />
+          <MetricCard title="Duplicate Records" value={`${prevDuplicates} ➔ ${newDuplicates}`} icon={Copy} color="text-emerald-600" bg="bg-emerald-50" />
+          <MetricCard title="Format Errors" value={`${prevFormatErrs} ➔ ${newFormatErrs}`} icon={Wand2} color="text-emerald-600" bg="bg-emerald-50" />
+          <MetricCard title="Anomalies" value={`${prevAnomalies} ➔ ${newAnomalies}`} icon={AlertTriangle} color="text-emerald-600" bg="bg-emerald-50" />
         </div>
       </div>
 
       {/* 2. Correction Summary KPIs */}
       <div>
-        <h3 className="text-xl font-bold mb-4" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span>📊</span> 2. Applied Remediation Breakdown
+        <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-gray-900">
+          <BarChart3 className="w-5 h-5 text-blue-600" />
+          <span>2. Applied Remediation Breakdown</span>
         </h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="card">
@@ -89,8 +108,10 @@ const CorrectionComparisonSuite = ({ beforeAnalysis = {}, afterAnalysis = {}, ap
           </div>
           <div className="card">
             <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>AI Auto Fixes vs User Edits</p>
-            <h3 style={{ fontSize: '1.25rem', fontWeight: '700', marginTop: '0.25rem' }}>
-              🤖 <span style={{ color: 'var(--success)' }}>{aiFixes} AI</span> | 👤 <span style={{ color: 'var(--warning)' }}>{userEdits} User</span>
+            <h3 style={{ fontSize: '1.25rem', fontWeight: '700', marginTop: '0.25rem' }} className="flex items-center gap-2">
+              <span className="flex items-center gap-1 text-emerald-600"><Bot className="w-4 h-4 text-emerald-600" /> {aiFixes} AI</span>
+              <span>|</span>
+              <span className="flex items-center gap-1 text-amber-600"><User className="w-4 h-4 text-amber-600" /> {userEdits} User</span>
             </h3>
           </div>
           <div className="card">
@@ -99,18 +120,33 @@ const CorrectionComparisonSuite = ({ beforeAnalysis = {}, afterAnalysis = {}, ap
               {uniqueRows} Rows | {uniqueCols} Columns
             </h3>
           </div>
-          <div className="card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <button onClick={handleDownloadLogCSV} className="btn btn-secondary" style={{ width: '100%', fontSize: '0.875rem' }}>
-              📄 Export Audit Log (CSV)
+          <div className="card flex flex-col gap-2 justify-center">
+            {openBeforeAfterReportModal && (
+              <button
+                onClick={openBeforeAfterReportModal}
+                title="View Interactive Before & After Web Report"
+                className="btn bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center gap-2"
+                style={{ width: '100%', fontSize: '0.8125rem' }}
+              >
+                <FileText className="w-4 h-4" />
+                <span>View Before & After Report</span>
+              </button>
+            )}
+
+            <button onClick={handleDownloadLogCSV} className="btn btn-secondary flex items-center justify-center gap-2" style={{ width: '100%', fontSize: '0.8125rem' }}>
+              <FileSpreadsheet className="w-4 h-4 text-gray-700" />
+              <span>Export Audit Log (CSV)</span>
             </button>
           </div>
+
         </div>
       </div>
 
       {/* 3. Detailed Correction Audit Report Table */}
       <div>
-        <h3 className="text-xl font-bold mb-4" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span>📋</span> 3. Detailed Correction Audit Log
+        <h3 className="text-xl font-bold mb-4 flex items-center gap-2 text-gray-900">
+          <ClipboardList className="w-5 h-5 text-indigo-600" />
+          <span>3. Detailed Correction Audit Log</span>
         </h3>
 
         <div className="card">

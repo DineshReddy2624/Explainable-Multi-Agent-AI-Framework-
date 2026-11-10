@@ -16,4 +16,6 @@ from models.organization import Organization
 from models.dataset_version import DatasetVersion
 from models.audit_log import AuditLog
 from models.document import Document, DocumentVersion, DocumentChunk
+from models.generated_code import GeneratedCode
+
 

@@ -10,7 +10,11 @@ class AdaptiveAnomalyEngine:
     def __init__(self):
         pass
 
+    def detect_anomalies(self, df: pd.DataFrame) -> dict:
+        return self.run_adaptive_analysis(df)
+
     def run_adaptive_analysis(self, df: pd.DataFrame) -> dict:
+
         if df is None or df.empty:
             return self._empty_result()
 
@@ -18,8 +22,8 @@ class AdaptiveAnomalyEngine:
         total_cols = len(df.columns)
         headers = list(df.columns)
 
-        numeric_cols = list(df.select_dtypes(include=[np.number]).columns)
-        categorical_cols = list(df.select_dtypes(exclude=[np.number]).columns)
+        numeric_cols = [c for c in df.select_dtypes(include=[np.number]).columns if not any(id_k in c.lower() for id_k in ["id", "key", "index"])]
+        categorical_cols = [c for c in df.columns if c not in numeric_cols]
 
         # 1. Step 1: Analyze Dataset Characteristics
         null_cells = int(df.isnull().sum().sum())
@@ -130,7 +134,7 @@ class AdaptiveAnomalyEngine:
 
             # Execution 3: Isolation Forest
             if "Isolation Forest" in algo_flags:
-                iso = IsolationForest(contamination=0.08, random_state=42)
+                iso = IsolationForest(contamination='auto', random_state=42)
                 iso_preds = iso.fit_predict(scaled_matrix)
                 for r_idx, pred in enumerate(iso_preds):
                     if pred == -1:
@@ -139,7 +143,7 @@ class AdaptiveAnomalyEngine:
             # Execution 4: Local Outlier Factor (LOF)
             if "Local Outlier Factor (LOF)" in algo_flags:
                 n_neighbors = min(20, max(2, total_rows - 1))
-                lof = LocalOutlierFactor(n_neighbors=n_neighbors, contamination=0.08)
+                lof = LocalOutlierFactor(n_neighbors=n_neighbors, contamination='auto')
                 lof_preds = lof.fit_predict(scaled_matrix)
                 for r_idx, pred in enumerate(lof_preds):
                     if pred == -1:
@@ -171,6 +175,11 @@ class AdaptiveAnomalyEngine:
         for r_idx in sorted(all_flagged_rows):
             flagged_by_algos = [algo for algo in executed_algos if r_idx in algo_flags[algo]]
             flag_count = len(flagged_by_algos)
+
+            # Filter: Require at least 2 algorithms consensus OR both Z-Score & IQR statistical outlier agreement
+            is_stat_outlier = ("Z-Score" in flagged_by_algos and "IQR (Interquartile Range)" in flagged_by_algos)
+            if flag_count < 2 and not is_stat_outlier:
+                continue
 
             # Ensemble confidence percentage
             confidence_pct = round((flag_count / total_exec_count) * 100, 1)

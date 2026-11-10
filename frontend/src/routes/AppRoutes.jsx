@@ -15,6 +15,7 @@ import ChatWithDataset from '../pages/ChatWithDataset';
 import Reports from '../pages/Reports';
 import History from '../pages/History';
 import Settings from '../pages/Settings';
+import OAuthCallback from '../pages/OAuthCallback';
 
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated } = useAuth();
@@ -33,6 +34,11 @@ const AppRoutes = () => {
         path="/login"
         element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />}
       />
+      <Route
+        path="/oauth/callback"
+        element={<OAuthCallback />}
+      />
+
       <Route
         path="/dashboard"
         element={<ProtectedRoute><Dashboard /></ProtectedRoute>}
@@ -61,6 +67,11 @@ const AppRoutes = () => {
         path="/explainability"
         element={<ProtectedRoute><Explainability /></ProtectedRoute>}
       />
+      <Route
+        path="/explainable-ai"
+        element={<ProtectedRoute><Explainability /></ProtectedRoute>}
+      />
+
       <Route
         path="/monitoring"
         element={<ProtectedRoute><Monitoring /></ProtectedRoute>}

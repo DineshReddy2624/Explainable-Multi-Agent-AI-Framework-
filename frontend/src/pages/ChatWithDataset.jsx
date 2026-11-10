@@ -275,13 +275,13 @@ const processClientDatasetQuery = (query, chatAnalysis) => {
 
     if (report.length > 0) {
       report.forEach(r => {
-        tableLines.push(`| **\`${r.column}\`** | ${r.null_count} | ${r.missing_pct}% |`);
+        tableLines.push(`| \`${r.column}\` | ${r.null_count} | ${r.missing_pct}% |`);
       });
     } else if (totMissing > 0) {
-      tableLines.push(`| **\`Dataset\`** | ${totMissing} | ${((totMissing / (totRows * activeHeaders.length)) * 100).toFixed(1)}% |`);
+      tableLines.push(`| \`Dataset\` | ${totMissing} | ${((totMissing / (totRows * activeHeaders.length)) * 100).toFixed(1)}% |`);
     } else {
       activeHeaders.forEach(h => {
-        tableLines.push(`| **\`${h}\`** | 0 | 0% |`);
+        tableLines.push(`| \`${h}\` | 0 | 0% |`);
       });
     }
 
@@ -1432,7 +1432,7 @@ const ChatWithDataset = () => {
                         <ShieldCheck className="w-3 h-3 text-emerald-600" />
                         <span>Source: <strong className="text-gray-700">{msg.source.filename}</strong></span>
                         <span>•</span>
-                        <span>Confidence: <strong className="text-emerald-600">{msg.source.confidence_score}%</strong></span>
+                        <span>Confidence: <strong className="text-emerald-600">{(msg.source.confidence_score <= 1 ? (msg.source.confidence_score * 100).toFixed(0) : msg.source.confidence_score)}%</strong></span>
                       </div>
 
                       <div className="flex items-center gap-2">

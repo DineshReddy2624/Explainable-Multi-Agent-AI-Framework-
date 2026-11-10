@@ -16,12 +16,15 @@ ROLE_PERMISSIONS = {
     },
     "ANALYST": {
         "dataset:create", "dataset:read", "dataset:clean", "dataset:profile",
-        "dataset:chat", "dataset:export", "job:read", "report:read", "report:export"
+        "dataset:chat", "dataset:export", "dataset:delete", "job:read", "report:read", "report:export"
     },
     "VIEWER": {
         "dataset:read", "dataset:profile", "dataset:chat", "report:read", "job:read"
     }
 }
+# Backward compatibility alias
+ROLE_PERMISSIONS["ADMIN"] = ROLE_PERMISSIONS["ORG_ADMIN"]
+
 
 def has_permission(role: str, permission: str) -> bool:
     """Check if given role possesses the requested permission."""

@@ -12,12 +12,12 @@ router = APIRouter()
 
 @router.get("/{dataset_id}")
 @router.get("/download/{dataset_id}")
-def download_cleaned_dataset(dataset_id: int, format: str = "csv", db: Session = Depends(get_db), tenant: dict = Depends(get_tenant_context)):
+def download_cleaned_dataset(dataset_id: int, format: str = "csv", mask_pii: bool = False, db: Session = Depends(get_db), tenant: dict = Depends(get_tenant_context)):
     verify_dataset_access(dataset_id, tenant["org_id"], db)
     cached = storage_service.load_dataset(dataset_id, db=db, org_id=tenant["org_id"])
     
     if cached and "cleaned_df" in cached:
-        df = cached["cleaned_df"]
+        df = cached["cleaned_df"].copy()
         filename_base = cached.get("filename", f"dataset_{dataset_id}").rsplit('.', 1)[0]
     else:
         tenant_cleaned_dir = os.path.join(settings.CLEANED_DIR, "organizations", tenant["org_id"])
@@ -29,9 +29,9 @@ def download_cleaned_dataset(dataset_id: int, format: str = "csv", db: Session =
         import pandas as pd
         df = pd.read_csv(file_path)
         filename_base = f"dataset_{dataset_id}"
-    # Privacy Protection: If non-admin user exports a dataset with PII, apply automatic masking
-    user_role = (tenant.get("role") or "").upper()
-    if user_role not in ["SUPER_ADMIN", "ORG_ADMIN"]:
+
+    # Only apply PII masking if explicitly requested via mask_pii=True
+    if mask_pii:
         pii_cols = cached.get("pii_detected") if (cached and "pii_detected" in cached) else []
         if not pii_cols:
             from services.privacy.pii_detector import pii_detector
@@ -61,5 +61,25 @@ def download_cleaned_dataset(dataset_id: int, format: str = "csv", db: Session =
         )
         response.headers["Content-Disposition"] = f"attachment; filename={filename_base}_cleaned.xlsx"
         return response
+    elif format.lower() == "pdf":
+        from services.exporter.pdf_report import generate_before_after_pdf_bytes
+        before_analysis = cached.get("analysis", {}) if cached else {}
+        after_analysis = cached.get("analysis", {}) if cached else {}
+        applied_logs = cached.get("logs", []) if cached else []
+        filename = cached.get("filename", f"dataset_{dataset_id}.csv") if cached else f"dataset_{dataset_id}.csv"
+
+        pdf_bytes = generate_before_after_pdf_bytes(
+            before_analysis=before_analysis,
+            after_analysis=after_analysis,
+            applied_logs=applied_logs,
+            filename=filename,
+            dataset_id=dataset_id,
+            org_id=tenant["org_id"]
+        )
+        stream = io.BytesIO(pdf_bytes)
+        response = StreamingResponse(stream, media_type="application/pdf")
+        response.headers["Content-Disposition"] = f"attachment; filename={filename_base}_before_after_cleaning_report.pdf"
+        return response
     else:
-        raise HTTPException(status_code=400, detail="Unsupported export format. Use csv or excel.")
+        raise HTTPException(status_code=400, detail="Unsupported export format. Use csv, excel, or pdf.")
+

@@ -142,13 +142,23 @@ class DynamicDatasetAnalyzer:
         anomalies = []
 
         for item in adaptive_analysis.get("ensemble_results", []):
+            conf = item.get("confidence_score", 85.0)
+            score_dec = round(conf / 100.0, 2) if conf > 1.0 else round(conf, 2)
             anomalies.append({
                 "row_index": item["row_index"],
+                "record_id": item.get("record_id", f"Record #{item['row_index'] + 1}"),
                 "column": item["primary_feature"],
+                "primary_feature": item["primary_feature"],
                 "value": item["feature_value"],
-                "anomaly_score": item["confidence_score"],
+                "feature_value": item["feature_value"],
+                "anomaly_score": score_dec,
+                "confidence_score": conf,
                 "reason": item["explanation"],
-                "flagged_algorithms": item["flagged_algorithms"]
+                "explanation": item["explanation"],
+                "flagged_algorithms": item.get("flagged_algorithms", ["Isolation Forest"]),
+                "detection_count": item.get("detection_count", 1),
+                "total_executed": item.get("total_executed", 1),
+                "threshold": 0.65
             })
 
         # 6. SHAP Feature Importance

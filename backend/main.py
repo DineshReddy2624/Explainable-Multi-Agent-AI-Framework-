@@ -1,6 +1,20 @@
+import inspect
+import starlette.routing
+
+_orig_router_init = starlette.routing.Router.__init__
+def _patched_router_init(self, *args, **kwargs):
+    sig = inspect.signature(_orig_router_init)
+    valid_params = sig.parameters.keys()
+    if 'kwargs' not in valid_params:
+        kwargs = {k: v for k, v in kwargs.items() if k in valid_params}
+    _orig_router_init(self, *args, **kwargs)
+
+starlette.routing.Router.__init__ = _patched_router_init
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
 
 from core.config import settings
 from core.database import engine, Base
@@ -10,10 +24,34 @@ from core.exceptions import BaseAppException, app_exception_handler
 # Create database tables automatically
 Base.metadata.create_all(bind=engine)
 
+# Auto-migrate schema for missing columns if database pre-existed
+from sqlalchemy import text
+with engine.connect() as conn:
+    # Users table new columns
+    for col, col_type in [("avatar_url", "VARCHAR"), ("google_id", "VARCHAR"), ("auth_provider", "VARCHAR")]:
+        try:
+            conn.execute(text(f"ALTER TABLE users ADD COLUMN {col} {col_type};"))
+            conn.commit()
+        except Exception:
+            pass
+    # DatasetMetadata table new columns
+    for col, col_type in [
+        ("original_file_path", "VARCHAR"),
+        ("saved_at", "DATETIME"),
+        ("workflow_bundle", "JSON"),
+    ]:
+        try:
+            conn.execute(text(f"ALTER TABLE dataset_metadata ADD COLUMN {col} {col_type};"))
+            conn.commit()
+        except Exception:
+            pass
+
+
+
 from api import (
     auth, upload, profiling, issues, anomalies, monitoring,
     correction, explainability, chatbot, chat, rules,
-    history, reports, export, jobs, documents
+    history, reports, export, jobs, documents, generated_code
 )
 
 
@@ -97,6 +135,8 @@ app.include_router(anomalies.router, prefix=f"{settings.API_V1_STR}/anomalies", 
 app.include_router(monitoring.router, prefix=f"{settings.API_V1_STR}/monitoring", tags=["Monitoring"])
 app.include_router(correction.router, prefix=f"{settings.API_V1_STR}/correction", tags=["Correction"])
 app.include_router(explainability.router, prefix=f"{settings.API_V1_STR}/explainability", tags=["Explainability"])
+app.include_router(explainability.router, prefix=f"{settings.API_V1_STR}/explainable-ai", tags=["Explainable AI"])
+
 app.include_router(chatbot.router, prefix=f"{settings.API_V1_STR}/chatbot", tags=["Chatbot"])
 app.include_router(chat.router, prefix=f"{settings.API_V1_STR}/chat", tags=["Chat"])
 app.include_router(rules.router, prefix=f"{settings.API_V1_STR}/rules", tags=["Rules"])
@@ -105,6 +145,8 @@ app.include_router(reports.router, prefix=f"{settings.API_V1_STR}/reports", tags
 app.include_router(export.router, prefix=f"{settings.API_V1_STR}/export", tags=["Export"])
 app.include_router(jobs.router, prefix=f"{settings.API_V1_STR}/jobs", tags=["Jobs"])
 app.include_router(documents.router, prefix=f"{settings.API_V1_STR}/documents", tags=["Documents"])
+app.include_router(generated_code.router, prefix=f"{settings.API_V1_STR}/code", tags=["Generated Code"])
+
 
 
 @app.get("/")

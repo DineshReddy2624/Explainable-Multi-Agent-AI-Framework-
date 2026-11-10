@@ -2,7 +2,7 @@ import os
 import re
 from fastapi import HTTPException, status
 
-ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls"}
+ALLOWED_EXTENSIONS = {".csv", ".xlsx", ".xls", ".parquet", ".pdf", ".json", ".tsv"}
 MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB Limit
 
 def sanitize_filename(filename: str) -> str:

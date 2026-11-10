@@ -35,3 +35,44 @@ def get_shap_explanation(dataset_id: int, db: Session = Depends(get_db), tenant:
         "feature_importance": feature_importance,
         "confidence_score": 0.95
     }, message="Calculated feature importance and explainability matrix.")
+
+
+@router.get("/xai-explanations/{dataset_id}")
+def get_xai_explanations(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    tenant: dict = Depends(get_tenant_context)
+):
+    """Retrieves plain English row-by-row explanations for ML anomalies and syntax errors."""
+    verify_dataset_access(dataset_id, tenant["org_id"], db)
+    from services.ai.explainable_ai_service import explainable_ai_service
+    res = explainable_ai_service.generate_xai_explanations(dataset_id, db=db, org_id=tenant["org_id"])
+    return StandardResponse.ok(data=res, message="Generated row-by-row Explainable AI explanations.")
+
+
+@router.post("/explain-row")
+def explain_row(
+    payload: dict,
+    db: Session = Depends(get_db),
+    tenant: dict = Depends(get_tenant_context)
+):
+    """Generates a deep-dive LLM plain English explanation for a specific row entry."""
+    dataset_id = payload.get("dataset_id", 1)
+    row_index = payload.get("row_index", 1)
+    column_name = payload.get("column_name", "column")
+    issue_type = payload.get("issue_type", "ML_ANOMALY")
+    raw_value = payload.get("raw_value", "N/A")
+
+    verify_dataset_access(dataset_id, tenant["org_id"], db)
+    from services.ai.explainable_ai_service import explainable_ai_service
+    res = explainable_ai_service.explain_row_with_llm(
+        dataset_id=dataset_id,
+        row_index=row_index,
+        column_name=column_name,
+        issue_type=issue_type,
+        raw_value=raw_value,
+        db=db,
+        org_id=tenant["org_id"]
+    )
+    return StandardResponse.ok(data=res, message="Generated deep-dive LLM row explanation.")
+

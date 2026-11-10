@@ -1,6 +1,7 @@
 import os
 import io
 import json
+import datetime
 import pandas as pd
 
 from typing import Optional, Dict, Any, List
@@ -10,6 +11,12 @@ from core.config import settings
 from core.database import SessionLocal
 from models.dataset import Dataset
 from models.dataset_metadata import DatasetMetadata
+from models.dataset_version import DatasetVersion
+from models.issue import Issue
+from models.anomaly import Anomaly
+from models.correction import Correction
+from models.report import Report
+from core.tenant_security import log_audit_event
 from services.agents.dynamic_analyzer import DynamicDatasetAnalyzer
 from services.data_engine import data_engine
 from core.file_security import validate_uploaded_file, sanitize_filename
@@ -31,18 +38,36 @@ class DatasetStorageService:
         file_bytes = io.BytesIO(content)
         lower_fn = filename.lower()
 
-        if lower_fn.endswith((".xlsx", ".xls")):
+        # Check for Parquet extension or magic header bytes (PAR1)
+        if lower_fn.endswith(".parquet") or content.startswith(b"PAR1"):
+            try:
+                return pd.read_parquet(file_bytes)
+            except Exception:
+                file_bytes.seek(0)
+                try:
+                    import pyarrow.parquet as pq
+                    table = pq.read_table(file_bytes)
+                    return table.to_pandas()
+                except Exception:
+                    file_bytes.seek(0)
+
+        if lower_fn.endswith((".xlsx", ".xls")) or content.startswith(b"PK\x03\x04"):
             try:
                 return pd.read_excel(file_bytes)
             except Exception:
                 file_bytes.seek(0)
                 return pd.read_csv(file_bytes)
-        else:
+        elif lower_fn.endswith(".json"):
             try:
-                return pd.read_csv(file_bytes)
+                return pd.read_json(file_bytes)
             except Exception:
                 file_bytes.seek(0)
-                return pd.read_excel(file_bytes)
+
+        try:
+            return pd.read_csv(file_bytes)
+        except Exception:
+            file_bytes.seek(0)
+            return pd.read_excel(file_bytes)
 
     def save_dataset(self, filename: str, content: bytes, db: Optional[Session] = None, org_id: str = "org_default", owner_user_id: Optional[int] = None) -> Dict[str, Any]:
         close_db = False
@@ -55,6 +80,19 @@ class DatasetStorageService:
             clean_filename = validate_uploaded_file(filename, content)
             df = self._parse_bytes_to_dataframe(clean_filename, content)
             df.columns = [str(c).strip() for c in df.columns]
+
+            # Classify source_type (DEMO vs USER_UPLOAD)
+            fn_lower = clean_filename.lower()
+            demo_keywords = [
+                "dataset_1", "dataset_2", "dataset_3", "dataset_4", "dataset_5",
+                "dataset_6", "dataset_7", "dataset_8", "dataset_9", "dataset_10",
+                "customer_demographics", "e_commerce_transactions", "healthcare_patient",
+                "financial_loan", "hr_employee", "iot_sensor", "customer_churn",
+                "real_estate", "cybersecurity_audit", "credit_card_fraud",
+                "synthetic_employees", "customer_pii", "test_task"
+            ]
+            is_demo = any(k in fn_lower for k in demo_keywords)
+            source_type = "DEMO" if is_demo else "USER_UPLOAD"
             
             # 1. Create DB record for dataset with org_id and owner_user_id
             db_dataset = Dataset(
@@ -66,7 +104,10 @@ class DatasetStorageService:
                 file_type=clean_filename.rsplit('.', 1)[-1].lower(),
                 status="PROFILED",
                 version_number=1,
-                version_type="ORIGINAL"
+                version_type="ORIGINAL",
+                source_type=source_type,
+                artifact_type="RAW_DATASET",
+                is_persisted=False
             )
             db.add(db_dataset)
             db.commit()
@@ -176,6 +217,7 @@ class DatasetStorageService:
                 db.close()
 
     def load_dataset(self, dataset_id: int, db: Optional[Session] = None, org_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Load a dataset from cache or persistent storage, restoring workflow bundle if available."""
         # 1. Check in-memory cache if org_id matches
         if dataset_id in active_datasets_cache:
             cached = active_datasets_cache[dataset_id]
@@ -199,34 +241,67 @@ class DatasetStorageService:
 
             db_metadata = db.query(DatasetMetadata).filter(DatasetMetadata.dataset_id == dataset_id).first()
 
-            # 3. Load Parquet / CSV file from persistent storage disk
-            cleaned_path = os.path.join(self.cleaned_dir, f"cleaned_dataset_{dataset_id}.parquet")
-            cleaned_csv_path = os.path.join(self.cleaned_dir, f"cleaned_dataset_{dataset_id}.csv")
-            parquet_path = os.path.join(self.upload_dir, f"dataset_{dataset_id}.parquet")
+            # 3. Restore from workflow_bundle if it exists (full state from previous Save)
+            bundle = db_metadata.workflow_bundle if db_metadata else None
+            if bundle and bundle.get("final_records"):
+                # We have a fully persisted workflow bundle — restore everything from DB
+                final_df = pd.DataFrame(bundle["final_records"])
+                final_df.columns = [str(c).strip() for c in final_df.columns]
+
+                raw_records_preview = (
+                    final_df.head(100).to_dict(orient="records")
+                )
+
+                analysis_result = bundle.get("after_analysis") or (db_metadata.stats_summary if db_metadata else {})
+
+                cache_payload = {
+                    "dataset_id": dataset_id,
+                    "org_id": db_dataset.org_id,
+                    "filename": db_dataset.filename,
+                    "raw_df": final_df,
+                    "cleaned_df": final_df.copy(),
+                    "analysis": analysis_result,
+                    "records": raw_records_preview,
+                    "file_path": db_dataset.file_path,
+                    "cleaned_file_path": db_dataset.cleaned_file_path,
+                    # Restored workflow state
+                    "logs": bundle.get("applied_logs", []),
+                    "workflow_bundle": bundle,
+                }
+
+                active_datasets_cache[dataset_id] = cache_payload
+                return cache_payload
+
+            # 4. No bundle — load Parquet / CSV file from persistent storage disk
+            db_org_id = db_dataset.org_id or org_id or "org_default"
+            tenant_cleaned_dir = os.path.join(self.cleaned_dir, "organizations", db_org_id)
+            tenant_upload_dir = os.path.join(self.upload_dir, "organizations", db_org_id)
+
+            possible_paths = [
+                db_dataset.cleaned_file_path if db_dataset.cleaned_file_path else "",
+                os.path.join(tenant_cleaned_dir, f"cleaned_dataset_{dataset_id}.parquet"),
+                os.path.join(tenant_cleaned_dir, f"cleaned_dataset_{dataset_id}.csv"),
+                db_dataset.file_path if db_dataset.file_path else "",
+                os.path.join(tenant_upload_dir, f"dataset_{dataset_id}.parquet"),
+                os.path.join(self.cleaned_dir, f"cleaned_dataset_{dataset_id}.parquet"),
+                os.path.join(self.cleaned_dir, f"cleaned_dataset_{dataset_id}.csv"),
+                os.path.join(self.upload_dir, f"dataset_{dataset_id}.parquet")
+            ]
 
             df = None
-            if os.path.exists(cleaned_path):
-                try:
-                    df = pd.read_parquet(cleaned_path)
-                except Exception:
-                    df = pd.read_csv(cleaned_csv_path) if os.path.exists(cleaned_csv_path) else None
-
-            if df is None and os.path.exists(cleaned_csv_path):
-                df = pd.read_csv(cleaned_csv_path)
-
-            if df is None and os.path.exists(parquet_path):
-                try:
-                    df = pd.read_parquet(parquet_path)
-                except Exception:
-                    df = None
-
-            if df is None and os.path.exists(db_dataset.file_path):
-                if db_dataset.file_path.endswith(".parquet"):
-                    df = pd.read_parquet(db_dataset.file_path)
-                elif db_dataset.file_path.endswith((".xlsx", ".xls")):
-                    df = pd.read_excel(db_dataset.file_path)
-                else:
-                    df = pd.read_csv(db_dataset.file_path)
+            for p in possible_paths:
+                if p and os.path.exists(p):
+                    try:
+                        if p.endswith(".parquet"):
+                            df = pd.read_parquet(p)
+                        elif p.endswith((".xlsx", ".xls")):
+                            df = pd.read_excel(p)
+                        else:
+                            df = pd.read_csv(p)
+                        if df is not None and not df.empty:
+                            break
+                    except Exception:
+                        continue
 
             if df is None:
                 return None
@@ -238,13 +313,16 @@ class DatasetStorageService:
 
             cache_payload = {
                 "dataset_id": dataset_id,
+                "org_id": db_dataset.org_id,
                 "filename": db_dataset.filename,
                 "raw_df": df,
                 "cleaned_df": df.copy(),
                 "analysis": analysis_result,
                 "records": raw_records,
                 "file_path": db_dataset.file_path,
-                "cleaned_file_path": db_dataset.cleaned_file_path
+                "cleaned_file_path": db_dataset.cleaned_file_path,
+                "logs": [],
+                "workflow_bundle": None
             }
 
             active_datasets_cache[dataset_id] = cache_payload
@@ -254,7 +332,94 @@ class DatasetStorageService:
             if close_db:
                 db.close()
 
-    def save_cleaned_dataset(self, dataset_id: int, cleaned_df: pd.DataFrame, logs: List[Any], db: Optional[Session] = None, org_id: str = "org_default", user_id: Optional[int] = None) -> Dict[str, Any]:
+    def load_workflow_bundle(self, dataset_id: int, db: Optional[Session] = None, org_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Returns the complete persisted workflow state for a dataset — all 14 items
+        (original records, final records, change history, quality decisions,
+        anomaly decisions, before/after analysis, applied logs, metadata).
+
+        Returns None if no workflow bundle has been saved for this dataset yet.
+        """
+        close_db = False
+        if db is None:
+            db = SessionLocal()
+            close_db = True
+
+        try:
+            query = db.query(Dataset).filter(Dataset.id == dataset_id)
+            if org_id:
+                query = query.filter(Dataset.org_id == org_id)
+            db_dataset = query.first()
+            if not db_dataset:
+                return None
+
+            db_metadata = db.query(DatasetMetadata).filter(DatasetMetadata.dataset_id == dataset_id).first()
+            if not db_metadata or not db_metadata.workflow_bundle:
+                return None
+
+            bundle = db_metadata.workflow_bundle
+            return {
+                # ─ Core bundle ───────────────────────────────────────────────
+                "dataset_id": dataset_id,
+                "filename": db_dataset.filename,
+                "org_id": db_dataset.org_id,
+                "status": db_dataset.status,
+                # ─ Dataset data (all 14 items) ─────────────────────────────
+                "original_records": bundle.get("original_records", []),
+                "final_records": bundle.get("final_records", []),
+                "change_history": bundle.get("change_history", []),
+                "quality_decisions": bundle.get("quality_decisions", {}),
+                "anomaly_decisions": bundle.get("anomaly_decisions", {}),
+                "applied_logs": bundle.get("applied_logs", []),
+                "before_analysis": bundle.get("before_analysis", {}),
+                "after_analysis": bundle.get("after_analysis", {}),
+                # ─ File references ───────────────────────────────────────────
+                "original_file_path": bundle.get("original_file_path"),
+                "final_file_path": bundle.get("final_file_path"),
+                # ─ Summary metadata ──────────────────────────────────────────
+                "total_rows_original": bundle.get("total_rows_original", 0),
+                "total_rows_final": bundle.get("total_rows_final", 0),
+                "total_cols": bundle.get("total_cols", 0),
+                "column_names": bundle.get("column_names", []),
+                "saved_at": bundle.get("saved_at") or (db_metadata.saved_at.isoformat() if db_metadata.saved_at else None),
+                "saved_by_user_id": bundle.get("saved_by_user_id"),
+                "change_history_count": len(bundle.get("change_history", [])),
+                "quality_decisions_count": len(bundle.get("quality_decisions", {})),
+                "anomaly_decisions_count": len(bundle.get("anomaly_decisions", {})),
+                "workflow_bundle_stored": True,
+            }
+        finally:
+            if close_db:
+                db.close()
+
+    def save_cleaned_dataset(
+        self,
+        dataset_id: int,
+        cleaned_df: pd.DataFrame,
+        logs: List[Any],
+        db: Optional[Session] = None,
+        org_id: str = "org_default",
+        user_id: Optional[int] = None,
+        workflow_bundle: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Persists the cleaned dataset and the COMPLETE workflow bundle so that
+        after any restart (browser / server / computer) the full state can be
+        restored — including original records, change history, quality/anomaly
+        decisions, and before/after analysis results.
+
+        Parameters
+        ----------
+        workflow_bundle : dict, optional
+            Keys expected:
+                original_records    – list[dict] – raw rows before any editing
+                change_history      – list[dict] – every cell-level change
+                quality_decisions   – dict       – {"row_col_key": {...}}
+                anomaly_decisions   – dict       – {"row_col_key": {...}}
+                before_analysis     – dict       – profiling snapshot at upload time
+                after_analysis      – dict       – profiling snapshot at save time
+                applied_logs        – list[dict] – remediation log entries
+        """
         close_db = False
         if db is None:
             db = SessionLocal()
@@ -264,34 +429,122 @@ class DatasetStorageService:
             cached = self.load_dataset(dataset_id, db=db, org_id=org_id)
             filename = cached["filename"] if cached else f"dataset_{dataset_id}.csv"
 
-            # Storage isolation for cleaned dataset
+            # ── Storage isolation ────────────────────────────────────────────
             tenant_cleaned_dir = os.path.join(self.cleaned_dir, "organizations", org_id)
+            tenant_upload_dir = os.path.join(self.upload_dir, "organizations", org_id)
             os.makedirs(tenant_cleaned_dir, exist_ok=True)
+            os.makedirs(tenant_upload_dir, exist_ok=True)
 
             clean_parquet_path = os.path.join(tenant_cleaned_dir, f"cleaned_dataset_{dataset_id}.parquet")
             clean_csv_path = os.path.join(tenant_cleaned_dir, f"cleaned_dataset_{dataset_id}.csv")
 
+            # ── Persist final (cleaned) dataset ──────────────────────────────
             try:
                 cleaned_df.to_parquet(clean_parquet_path, index=False)
             except Exception:
                 pass
             cleaned_df.to_csv(clean_csv_path, index=False)
 
-            # Recalculate profiling stats
+            # ── Persist original dataset (immutable reference) ───────────────
+            original_parquet_path = os.path.join(tenant_upload_dir, f"original_dataset_{dataset_id}.parquet")
+            original_csv_path = os.path.join(tenant_upload_dir, f"original_dataset_{dataset_id}.csv")
+            original_records_for_db: List[Dict] = []
+
+            if workflow_bundle and workflow_bundle.get("original_records"):
+                original_records_for_db = workflow_bundle["original_records"]
+                if not os.path.exists(original_parquet_path):  # Never overwrite original
+                    orig_df = pd.DataFrame(original_records_for_db)
+                    try:
+                        orig_df.to_parquet(original_parquet_path, index=False)
+                    except Exception:
+                        pass
+                    orig_df.to_csv(original_csv_path, index=False)
+            elif cached and cached.get("raw_df") is not None:
+                # Fallback: save the cached raw_df as original if no bundle provided
+                orig_df = cached["raw_df"].copy()
+                if not os.path.exists(original_parquet_path):
+                    try:
+                        orig_df.to_parquet(original_parquet_path, index=False)
+                    except Exception:
+                        pass
+                    orig_df.to_csv(original_csv_path, index=False)
+
+            # ── Recalculate after-state profiling ────────────────────────────
             new_analysis = self.analyzer.analyze(cleaned_df, filename)
 
-            # Update Database record
+            # ── Build the persistent workflow bundle ──────────────────────────
+            # This is the complete state that survives server/browser restarts.
+            final_records_list = (
+                cleaned_df.to_dict(orient="records")
+                if len(cleaned_df) <= 10000
+                else cleaned_df.head(10000).to_dict(orient="records")
+            )
+
+            bundle_to_store: Dict[str, Any] = {
+                # ─ Dataset data ─────────────────────────────────────────────
+                "original_records": original_records_for_db,          # A – Original Dataset
+                "final_records": final_records_list,                   # B – Final Modified Dataset
+                # ─ Workflow decisions ────────────────────────────────────────
+                "change_history": (workflow_bundle or {}).get("change_history", []),     # M
+                "quality_decisions": (workflow_bundle or {}).get("quality_decisions", {}),  # E, F, L
+                "anomaly_decisions": (workflow_bundle or {}).get("anomaly_decisions", {}),  # G, H
+                "applied_logs": (workflow_bundle or {}).get("applied_logs", logs or []),    # J, K
+                # ─ Analysis results ──────────────────────────────────────────
+                "before_analysis": (workflow_bundle or {}).get("before_analysis") or (cached or {}).get("analysis", {}),  # D
+                "after_analysis": (workflow_bundle or {}).get("after_analysis") or new_analysis,  # D after
+                # ─ File references ───────────────────────────────────────────
+                "original_file_path": original_parquet_path if os.path.exists(original_parquet_path) else original_csv_path,
+                "final_file_path": clean_parquet_path if os.path.exists(clean_parquet_path) else clean_csv_path,
+                # ─ Metadata ──────────────────────────────────────────────────
+                "dataset_id": dataset_id,
+                "filename": filename,
+                "org_id": org_id,
+                "saved_by_user_id": user_id,
+                "total_rows_original": len(original_records_for_db),
+                "total_rows_final": len(cleaned_df),
+                "total_cols": len(cleaned_df.columns),
+                "column_names": list(cleaned_df.columns),
+                "saved_at": datetime.datetime.utcnow().isoformat(),
+            }
+
+            # ── Check if this is an explicit permanent save (workflow_bundle provided) ──
+            is_explicit_save = bool(
+                workflow_bundle is not None and (
+                    workflow_bundle.get("original_records") or
+                    workflow_bundle.get("change_history") or
+                    workflow_bundle.get("records") or
+                    workflow_bundle.get("quality_decisions") or
+                    workflow_bundle.get("anomaly_decisions")
+                )
+            )
+
+            # ── Update Dataset record ────────────────────────────────────────
             db_dataset = db.query(Dataset).filter(Dataset.id == dataset_id, Dataset.org_id == org_id).first()
             new_version_num = 2
+            clean_filename_base = os.path.basename(clean_csv_path)
+
             if db_dataset:
-                db_dataset.status = "CLEANED"
                 db_dataset.cleaned_file_path = clean_csv_path
                 db_dataset.version_number = (db_dataset.version_number or 1) + 1
-                db_dataset.version_type = "CLEANED"
+                db_dataset.cleaned_filename = clean_filename_base
+
+                if is_explicit_save:
+                    db_dataset.status = "SAVED"
+                    db_dataset.version_type = "SAVED"
+                    db_dataset.is_persisted = True
+                    db_dataset.artifact_type = "CLEANED_DATASET"
+                    db_dataset.source_type = "CLEANED_DATASET"
+                else:
+                    # Intermediate remediation step (preview/working version)
+                    db_dataset.status = "CLEANED"
+                    db_dataset.version_type = "CLEANED"
+                    db_dataset.is_persisted = False
+                    db_dataset.artifact_type = "RAW_DATASET"
+
                 new_version_num = db_dataset.version_number
                 db.commit()
 
-            # Record version lineage
+            # ── Record version lineage ────────────────────────────────────────
             from models.dataset_version import DatasetVersion
             from core.tenant_security import log_audit_event
 
@@ -300,23 +553,58 @@ class DatasetStorageService:
                 org_id=org_id,
                 version_number=new_version_num,
                 parent_version_id=1,
-                version_type="CLEANED",
+                version_type="SAVED" if is_explicit_save else "CLEANED",
                 file_path=clean_csv_path,
                 file_size=float(os.path.getsize(clean_csv_path)) if os.path.exists(clean_csv_path) else 0.0,
                 created_by_user_id=user_id
             )
             db.add(new_version)
 
+            # ── Persist full workflow bundle into DatasetMetadata ─────────────
             db_metadata = db.query(DatasetMetadata).filter(DatasetMetadata.dataset_id == dataset_id).first()
-            if db_metadata:
-                db_metadata.stats_summary = new_analysis
-                db_metadata.total_rows = len(cleaned_df)
-                db_metadata.total_columns = len(cleaned_df.columns)
-                db.commit()
+            if is_explicit_save:
+                if db_metadata:
+                    db_metadata.stats_summary = new_analysis
+                    db_metadata.total_rows = len(cleaned_df)
+                    db_metadata.total_columns = len(cleaned_df.columns)
+                    db_metadata.column_names = list(cleaned_df.columns)
+                    db_metadata.workflow_bundle = bundle_to_store  # ← PERSISTED BUNDLE
+                    db_metadata.original_file_path = bundle_to_store.get("original_file_path")
+                    db_metadata.saved_at = datetime.datetime.utcnow()
+                    db.commit()
+                else:
+                    # Create metadata record if it doesn't exist
+                    db_metadata = DatasetMetadata(
+                        dataset_id=dataset_id,
+                        org_id=org_id,
+                        total_rows=len(cleaned_df),
+                        total_columns=len(cleaned_df.columns),
+                        column_names=list(cleaned_df.columns),
+                        datatype_map={c: str(dt) for c, dt in cleaned_df.dtypes.items()},
+                        stats_summary=new_analysis,
+                        workflow_bundle=bundle_to_store,
+                        original_file_path=bundle_to_store.get("original_file_path"),
+                        saved_at=datetime.datetime.utcnow()
+                    )
+                    db.add(db_metadata)
+                    db.commit()
 
-            log_audit_event("DATASET_REMEDIATED", org_id=org_id, user_id=user_id, dataset_id=dataset_id, details={"logs": logs}, db=db)
+                log_audit_event("DATASET_SAVED", org_id=org_id, user_id=user_id, dataset_id=dataset_id, details={"filename": filename, "rows": len(cleaned_df), "workflow_bundle_keys": list(bundle_to_store.keys())}, db=db)
+            else:
+                # Intermediate cleaning only updates stats, not the saved repository
+                if db_metadata:
+                    db_metadata.stats_summary = new_analysis
+                    db_metadata.total_rows = len(cleaned_df)
+                    db_metadata.total_columns = len(cleaned_df.columns)
+                    db_metadata.column_names = list(cleaned_df.columns)
+                    db.commit()
 
-            new_records = cleaned_df.head(100).to_dict(orient="records")
+            # ── Update in-memory cache ────────────────────────────────────────
+            new_records_preview = (
+                cleaned_df.to_dict(orient="records")
+                if len(cleaned_df) <= 5000
+                else cleaned_df.head(1000).to_dict(orient="records")
+            )
 
             cache_payload = {
                 "dataset_id": dataset_id,
@@ -325,21 +613,33 @@ class DatasetStorageService:
                 "raw_df": cached.get("raw_df", cleaned_df) if cached else cleaned_df,
                 "cleaned_df": cleaned_df,
                 "analysis": new_analysis,
-                "records": new_records,
+                "records": new_records_preview,
+                "logs": bundle_to_store["applied_logs"],
                 "file_path": cached.get("file_path") if cached else clean_csv_path,
-                "cleaned_file_path": clean_csv_path
+                "cleaned_file_path": clean_csv_path,
+                "workflow_bundle": bundle_to_store
             }
 
             active_datasets_cache[dataset_id] = cache_payload
             return {
                 "dataset_id": dataset_id,
                 "org_id": org_id,
-                "version_name": "CLEANED",
-                "version_type": "CLEANED",
-                "records": new_records,
+                "saved": True,
+                "success": True,
+                "version_name": "SAVED",
+                "version_type": "SAVED",
+                "records": new_records_preview,
                 "analysis": new_analysis,
-                "logs": logs,
-                "cleaned_file_path": clean_csv_path
+                "logs": bundle_to_store["applied_logs"],
+                "cleaned_file_path": clean_csv_path,
+                "original_file_path": bundle_to_store.get("original_file_path"),
+                "workflow_bundle_stored": True,
+                "saved_at": bundle_to_store["saved_at"],
+                "total_rows_original": bundle_to_store["total_rows_original"],
+                "total_rows_final": bundle_to_store["total_rows_final"],
+                "change_history_count": len(bundle_to_store["change_history"]),
+                "quality_decisions_count": len(bundle_to_store["quality_decisions"]),
+                "anomaly_decisions_count": len(bundle_to_store["anomaly_decisions"]),
             }
 
         finally:
@@ -410,7 +710,13 @@ class DatasetStorageService:
             if close_db:
                 db.close()
 
-    def list_datasets(self, db: Optional[Session] = None, org_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    def list_datasets(self, db: Optional[Session] = None, org_id: Optional[str] = None, saved_only: bool = False) -> List[Dict[str, Any]]:
+        """
+        List datasets.
+        When saved_only=True, returns strictly valid persisted cleaned datasets that satisfy:
+          is_persisted = True AND artifact_type = 'CLEANED_DATASET' (with workflow_bundle)
+        When saved_only=False, returns all datasets for working/preview context.
+        """
         close_db = False
         if db is None:
             db = SessionLocal()
@@ -422,26 +728,177 @@ class DatasetStorageService:
             if org_id:
                 query = query.filter(Dataset.org_id == org_id)
 
+            if saved_only:
+                # Strictly eligible saved repository records
+                query = query.filter(
+                    Dataset.is_persisted == True,
+                    Dataset.artifact_type == "CLEANED_DATASET"
+                )
+
             db_datasets = query.order_by(Dataset.id.desc()).all()
-            
+
             for d in db_datasets:
                 db_meta = db.query(DatasetMetadata).filter(DatasetMetadata.dataset_id == d.id).first()
                 analysis = db_meta.stats_summary if (db_meta and db_meta.stats_summary) else {}
-                
+                bundle = db_meta.workflow_bundle if db_meta else None
+
+                # If saved_only is requested, ensure there is an actual persisted workflow bundle
+                if saved_only and not (bundle and bundle.get("final_records")):
+                    continue
+
+                # Prefer bundle counts over metadata if bundle is present (more accurate)
+                total_rows = (
+                    bundle.get("total_rows_final", 0)
+                    if bundle
+                    else analysis.get("total_rows", 0)
+                )
+                total_cols = (
+                    bundle.get("total_cols", 0)
+                    if bundle
+                    else analysis.get("total_cols", 0)
+                )
+
+                # Quality score from after_analysis if bundle available
+                after_analysis = bundle.get("after_analysis", {}) if bundle else {}
+                quality_score = (
+                    after_analysis.get("quality_scores", {}).get("overall_score")
+                    or analysis.get("quality_scores", {}).get("overall_score", 100)
+                )
+
+                saved_at = None
+                if db_meta and db_meta.saved_at:
+                    saved_at = db_meta.saved_at.isoformat()
+                elif bundle and bundle.get("saved_at"):
+                    saved_at = bundle["saved_at"]
+
+                cleaned_fn = d.cleaned_filename or (f"cleaned_{d.filename}" if not d.filename.startswith("cleaned_") else d.filename)
+                original_fn = d.filename
+
+                saved_ts = int(db_meta.saved_at.timestamp()) if (db_meta and db_meta.saved_at) else (int(d.created_at.timestamp()) if d.created_at else d.id)
+                workflow_id = f"WF-{d.id}-{saved_ts}"
+
                 results.append({
                     "id": d.id,
                     "dataset_id": d.id,
                     "org_id": d.org_id,
-                    "filename": d.filename,
-                    "total_rows": analysis.get("total_rows", 0),
-                    "total_cols": analysis.get("total_cols", 0),
-                    "quality_score": analysis.get("quality_scores", {}).get("overall_score", 100),
+                    "filename": cleaned_fn if (d.is_persisted or d.status == "SAVED") else original_fn,
+                    "original_filename": original_fn,
+                    "cleaned_filename": cleaned_fn,
+                    "source_type": d.source_type or ("CLEANED_DATASET" if d.is_persisted else "USER_UPLOAD"),
+                    "artifact_type": d.artifact_type or ("CLEANED_DATASET" if d.is_persisted else "RAW_DATASET"),
+                    "total_rows": total_rows,
+                    "original_row_count": bundle.get("total_rows_original", 0) if bundle else (db_meta.total_rows if db_meta else 0),
+                    "final_row_count": total_rows,
+                    "total_cols": total_cols,
+                    "quality_score": quality_score,
                     "status": d.status,
+                    "cleaning_status": d.status,
+                    "is_persisted": bool(d.is_persisted),
+                    "persistence_status": "Persistently Stored" if (d.is_persisted or d.status == "SAVED") else "Unsaved",
+                    "workflow_id": workflow_id,
+                    "storage_path": d.cleaned_file_path or d.file_path,
+                    "created_by": d.owner_user_id,
                     "version_number": d.version_number,
-                    "created_at": d.created_at.isoformat() if d.created_at else None
+                    "created_at": d.created_at.isoformat() if d.created_at else None,
+                    "saved_at": saved_at,
+                    # Persistence flags — tells frontend exactly what is stored
+                    "has_workflow_bundle": bool(bundle and bundle.get("final_records")),
+                    "has_original_records": bool(bundle and bundle.get("original_records")),
+                    "change_events": len(bundle.get("change_history", [])) if bundle else 0,
+                    "change_history_count": len(bundle.get("change_history", [])) if bundle else 0,
+                    "quality_decisions_count": len(bundle.get("quality_decisions", {})) if bundle else 0,
+                    "anomaly_decisions_count": len(bundle.get("anomaly_decisions", {})) if bundle else 0,
+                    "total_rows_original": bundle.get("total_rows_original", 0) if bundle else 0,
                 })
-                
+
             return results
+        finally:
+            if close_db:
+                db.close()
+
+    def delete_dataset(self, dataset_id: int, db: Optional[Session] = None, org_id: str = "org_default") -> bool:
+        """
+        Permanently delete a dataset, its versions, metadata, associated child records,
+        and underlying files from storage.
+        """
+        close_db = False
+        if db is None:
+            db = SessionLocal()
+            close_db = True
+
+        try:
+            # 1. Fetch dataset
+            query = db.query(Dataset).filter(Dataset.id == dataset_id)
+            if org_id:
+                query = query.filter(Dataset.org_id == org_id)
+            dataset = query.first()
+            if not dataset:
+                return False
+
+            effective_org_id = dataset.org_id or org_id or "org_default"
+
+            # 2. Gather all file paths to remove from disk
+            paths_to_delete = []
+            if dataset.file_path:
+                paths_to_delete.append(dataset.file_path)
+            if dataset.cleaned_file_path:
+                paths_to_delete.append(dataset.cleaned_file_path)
+
+            from models.dataset_version import DatasetVersion
+            from models.dataset_metadata import DatasetMetadata
+            from models.report import Report
+            from models.quality_score import QualityScore
+            from models.monitor_log import MonitorLog
+            from models.issue import Issue
+            from models.generated_code import GeneratedCode
+            from models.correction import Correction
+            from models.chat_history import ChatHistory
+            from models.anomaly import Anomaly
+
+            versions = db.query(DatasetVersion).filter(DatasetVersion.dataset_id == dataset_id).all()
+            for v in versions:
+                if v.file_path:
+                    paths_to_delete.append(v.file_path)
+
+            # Also check tenant dirs for files with this dataset_id pattern
+            tenant_cleaned_dir = os.path.join(self.cleaned_dir, "organizations", effective_org_id)
+            tenant_upload_dir = os.path.join(self.upload_dir, "organizations", effective_org_id)
+            paths_to_delete.extend([
+                os.path.join(tenant_cleaned_dir, f"cleaned_dataset_{dataset_id}.csv"),
+                os.path.join(tenant_cleaned_dir, f"cleaned_dataset_{dataset_id}.parquet"),
+                os.path.join(tenant_upload_dir, f"original_dataset_{dataset_id}.csv"),
+                os.path.join(tenant_upload_dir, f"original_dataset_{dataset_id}.parquet"),
+                os.path.join(tenant_upload_dir, f"dataset_{dataset_id}.csv"),
+                os.path.join(tenant_upload_dir, f"dataset_{dataset_id}.parquet"),
+            ])
+
+            for p in set(paths_to_delete):
+                if p and os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception as err:
+                        logger.warning(f"Could not remove disk file {p}: {err}")
+
+            # 3. Clean up related dependent records
+            models_to_clean = [
+                DatasetMetadata, DatasetVersion, Report, QualityScore,
+                MonitorLog, Issue, GeneratedCode, Correction, ChatHistory, Anomaly
+            ]
+            for model_cls in models_to_clean:
+                try:
+                    db.query(model_cls).filter(model_cls.dataset_id == dataset_id).delete(synchronize_session=False)
+                except Exception as err:
+                    logger.warning(f"Could not delete {model_cls.__name__} for dataset {dataset_id}: {err}")
+
+            # 4. Delete the dataset record itself
+            db.delete(dataset)
+            db.commit()
+
+            # 5. Remove from in-memory active datasets cache
+            if dataset_id in active_datasets_cache:
+                del active_datasets_cache[dataset_id]
+
+            return True
         finally:
             if close_db:
                 db.close()

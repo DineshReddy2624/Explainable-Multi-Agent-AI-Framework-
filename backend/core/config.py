@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
 
+    # OAuth SSO Credentials
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:3000/oauth/callback"
+    GITHUB_CLIENT_ID: str = ""
+    GITHUB_CLIENT_SECRET: str = ""
+    MICROSOFT_CLIENT_ID: str = ""
+    MICROSOFT_CLIENT_SECRET: str = ""
+
+
     # Vector Store & RAG Retrieval
     VECTOR_STORE_TYPE: str = "pgvector"  # "pgvector", "in_memory"
     TOP_K_VECTOR: int = 10

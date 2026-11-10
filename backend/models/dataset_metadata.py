@@ -1,4 +1,5 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, JSON, DateTime
+from datetime import datetime
 from core.database import Base
 
 class DatasetMetadata(Base):
@@ -12,3 +13,11 @@ class DatasetMetadata(Base):
     column_names = Column(JSON, nullable=True)
     datatype_map = Column(JSON, nullable=True)
     stats_summary = Column(JSON, nullable=True)
+    # workflow_bundle stores the complete persisted workflow state:
+    # original_records, final_records, change_history, quality_decisions,
+    # anomaly_decisions, before_analysis, after_analysis, applied_logs
+    workflow_bundle = Column(JSON, nullable=True)
+    # Path to the immutable original uploaded file (never overwritten)
+    original_file_path = Column(String, nullable=True)
+    # Timestamp when user explicitly clicked "Save Dataset"
+    saved_at = Column(DateTime, nullable=True)

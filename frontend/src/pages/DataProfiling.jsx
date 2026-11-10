@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { DatasetContext } from '../context/DatasetContext';
 import EmptyState from '../components/common/EmptyState';
 import StatusBadge from '../components/common/StatusBadge';
-import { BarChart3, Database, ShieldCheck, AlertCircle, Table, CheckCircle2, Upload } from 'lucide-react';
+import { BarChart3, Database, ShieldCheck, AlertCircle, Table, CheckCircle2, Upload, ArrowLeft, ArrowRight } from 'lucide-react';
 
 const DataProfiling = () => {
   const { filename, analysis } = useContext(DatasetContext);
@@ -167,6 +167,24 @@ const DataProfiling = () => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Workflow Bottom Navigation Bar */}
+      <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-5 bg-white rounded-xl border border-gray-200 shadow-sm mt-8">
+        <button
+          onClick={() => navigate('/upload')}
+          className="btn btn-secondary btn-sm flex items-center gap-2 font-semibold px-4 py-2.5 text-xs text-gray-700 hover:bg-gray-100"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Back: Upload & Analyze</span>
+        </button>
+        <button
+          onClick={() => navigate('/issues')}
+          className="btn btn-primary btn-sm flex items-center gap-2 font-semibold px-5 py-2.5 shadow-sm text-xs"
+        >
+          <span>Next: Quality Issues</span>
+          <ArrowRight className="w-4 h-4" />
+        </button>
       </div>
     </div>
   );

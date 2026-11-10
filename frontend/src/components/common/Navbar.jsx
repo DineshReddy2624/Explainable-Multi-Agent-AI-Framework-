@@ -47,15 +47,29 @@ const Navbar = () => {
         <div className="h-6 w-px bg-gray-200"></div>
 
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full bg-gray-100 border border-gray-200 flex items-center justify-center text-gray-700 font-semibold text-xs">
-              {user?.username?.charAt(0).toUpperCase() || user?.email?.charAt(0).toUpperCase() || 'U'}
-            </div>
+          <div className="flex items-center gap-2.5">
+            <img
+              src={user?.picture || user?.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(user?.full_name || user?.username || user?.email || 'User')}&background=0D8ABC&color=fff&bold=true&rounded=true`}
+              alt="Profile Avatar"
+              referrerPolicy="no-referrer"
+              className="w-9 h-9 rounded-full border-2 border-blue-100 object-cover shadow-sm shrink-0"
+              onError={(e) => {
+                e.target.onerror = null;
+                e.target.src = `https://ui-avatars.com/api/?name=${encodeURIComponent(user?.full_name || user?.username || 'User')}&background=0D8ABC&color=fff&bold=true&rounded=true`;
+              }}
+            />
+
             <div className="hidden sm:block text-left">
-              <p className="text-xs font-semibold text-gray-900 leading-tight">{user?.username || user?.email || 'User'}</p>
-              <p className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">{user?.role || 'ANALYST'}</p>
+              <p className="text-xs font-bold text-gray-900 leading-tight">
+                {user?.full_name || user?.username || user?.email || 'User Workspace'}
+              </p>
+              <p className="text-[10px] text-gray-500 font-medium leading-tight truncate max-w-[150px]">
+                {user?.email || user?.username || 'No Email Registered'}
+              </p>
             </div>
           </div>
+
+
 
           <button
             onClick={handleLogout}

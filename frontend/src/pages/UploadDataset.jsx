@@ -1,9 +1,11 @@
 import React, { useState, useContext, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import UploadBox from '../components/upload/UploadBox';
 import UploadProgress from '../components/upload/UploadProgress';
 import DatasetPreview from '../components/upload/DatasetPreview';
 import UnifiedAnalysisReport from '../components/dashboard/UnifiedAnalysisReport';
 import { DatasetContext } from '../context/DatasetContext';
+import { ArrowRight, BarChart3 } from 'lucide-react';
 
 const UploadDataset = () => {
   const [currentFile, setCurrentFile] = useState(null);
@@ -11,6 +13,7 @@ const UploadDataset = () => {
 
   const { uploadAndAnalyze, loading, analysis } = useContext(DatasetContext);
   const fileInputRef = useRef(null);
+  const navigate = useNavigate();
 
   const handleFileUpload = async (file) => {
     setCurrentFile(file);
@@ -72,7 +75,7 @@ const UploadDataset = () => {
         type="file"
         ref={fileInputRef}
         onChange={handleDirectFileInputChange}
-        accept=".csv,.xlsx,.xls,.parquet"
+        accept=".csv,.xlsx,.xls,.parquet,.pdf"
         className="hidden"
       />
 
@@ -80,7 +83,7 @@ const UploadDataset = () => {
         <>
           <div>
             <h2 className="text-xl font-extrabold text-slate-900 tracking-tight">Upload & AI Dataset Analysis</h2>
-            <p className="text-slate-500 text-xs mt-0.5">Upload any CSV, XLSX, or Parquet dataset to run real-time multi-agent quality profiling</p>
+            <p className="text-slate-500 text-xs mt-0.5">Upload any CSV, XLSX, Parquet, or PDF file to run real-time multi-agent quality profiling and generate Before & After Cleaning Reports</p>
           </div>
 
           <UploadBox onFileUpload={handleFileUpload} />
@@ -92,9 +95,32 @@ const UploadDataset = () => {
       )}
 
       {analysis && !loading && (
-        <UnifiedAnalysisReport
-          onReset={handleAnalyzeAnotherFile}
-        />
+        <>
+          <UnifiedAnalysisReport
+            fileInfo={currentFile}
+            onReset={handleAnalyzeAnotherFile}
+          />
+
+          {/* Workflow Bottom Navigation Bar */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-5 bg-white rounded-xl border border-gray-200 shadow-sm mt-8">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
+                <BarChart3 className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold text-gray-900">Step 1 Complete: Dataset Profile Initialized</h4>
+                <p className="text-xs text-gray-500">Proceed to automated feature auditing, schema metrics, and missing value matrix calculation.</p>
+              </div>
+            </div>
+            <button
+              onClick={() => navigate('/profiling')}
+              className="btn btn-primary btn-sm flex items-center gap-2 font-semibold px-5 py-2.5 shadow-sm text-xs"
+            >
+              <span>Next: Data Profiling</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </>
       )}
     </div>
   );

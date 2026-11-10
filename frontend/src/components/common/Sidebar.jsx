@@ -9,7 +9,7 @@ import {
   Wand2,
   MessageSquare,
   FileText,
-  Clock
+  BrainCircuit
 } from 'lucide-react';
 
 const navigationGroups = [
@@ -30,14 +30,22 @@ const navigationGroups = [
     ]
   },
   {
+    title: 'REPORTS & GOVERNANCE',
+    items: [
+      { label: 'Saved Reports', path: '/reports', icon: FileText }
+    ]
+  },
+
+  {
     title: 'INTELLIGENCE',
     items: [
-      { label: 'AI Dataset Chat', path: '/chat', icon: MessageSquare },
-      { label: 'Executive Reports', path: '/reports', icon: FileText },
-      { label: 'Background Jobs', path: '/monitoring', icon: Clock }
+      { label: 'Explainable AI', path: '/explainable-ai', icon: BrainCircuit },
+      { label: 'AI Dataset Chat', path: '/chat', icon: MessageSquare }
     ]
   }
 ];
+
+
 
 const Sidebar = () => {
   const location = useLocation();

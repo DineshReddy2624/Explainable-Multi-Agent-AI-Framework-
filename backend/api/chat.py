@@ -11,6 +11,37 @@ chat_agent = DatasetChatAgent()
 
 chat_dataset_store = {}
 
+def classify_query_intent(message: str) -> str:
+    """Classify user query into GREETING, DETAILED, or CONCISE intent."""
+    if not message:
+        return "CONCISE"
+    
+    msg_clean = re.sub(r'[^\w\s]', '', message.lower().strip())
+    words = msg_clean.split()
+    
+    greeting_phrases = [
+        "hi", "hello", "hey", "greetings", "good morning", "good afternoon",
+        "good evening", "howdy", "hola", "how are you", "who are you",
+        "what can you do", "help", "thanks", "thank you", "thx", "hi there", "hello there"
+    ]
+    
+    if msg_clean in greeting_phrases or (len(words) <= 3 and any(w in ["hi", "hello", "hey", "help", "thanks", "thx", "howdy"] for w in words)):
+        return "GREETING"
+        
+    big_keywords = [
+        "generate dataset summary", "dataset summary", "executive report",
+        "full report", "detailed report", "comprehensive analysis",
+        "deep dive", "analyze dataset", "full breakdown", "complete analysis",
+        "big output", "detailed summary", "overview report", "comprehensive report",
+        "detailed insights", "recommendations", "full assessment",
+        "detailed analysis", "detailed breakdown", "explain dataset", "in-depth"
+    ]
+    
+    if any(kw in msg_clean for kw in big_keywords) or len(words) > 12:
+        return "DETAILED"
+        
+    return "CONCISE"
+
 def parse_dataset_file(filename: str, content: bytes) -> pd.DataFrame:
     file_bytes = io.BytesIO(content)
 
@@ -189,49 +220,23 @@ def chat_message(payload: dict = Body(...), db: Session = Depends(get_db), tenan
         except (ValueError, TypeError):
             ds_id = None
 
-    # Strict Dataset Isolation: If payload explicitly specified dataset_id, load that exact dataset
+    # Strict Dataset Isolation: Load latest dataset version (cleaned or raw) from storage_service
     if ds_id is not None:
         verify_dataset_access(ds_id, org_id, db)
-        cache_key = (org_id, ds_id)
-        cached = chat_dataset_store.get(cache_key)
-
-        if cached:
-            df = cached.get("df")
-            analysis = cached.get("analysis")
-        else:
-            loaded = storage_service.load_dataset(ds_id, db=db, org_id=org_id)
-            if loaded:
-                df = loaded.get("cleaned_df", loaded.get("raw_df"))
-                analysis = loaded.get("analysis")
-                chat_dataset_store[cache_key] = {
-                    "df": df,
-                    "analysis": analysis,
-                    "filename": loaded.get("filename", "active_dataset.csv"),
-                    "dataset_id": ds_id
-                }
+        loaded = storage_service.load_dataset(ds_id, db=db, org_id=org_id)
+        if loaded:
+            df = loaded.get("cleaned_df", loaded.get("raw_df"))
+            analysis = loaded.get("analysis")
     else:
         # Fallback to active tenant datasets if unpopulated
         datasets = storage_service.list_datasets(db=db, org_id=org_id)
         if datasets:
             ds_id = datasets[0]["id"]
             verify_dataset_access(ds_id, org_id, db)
-            cache_key = (org_id, ds_id)
-            cached = chat_dataset_store.get(cache_key)
-
-            if cached:
-                df = cached.get("df")
-                analysis = cached.get("analysis")
-            else:
-                loaded = storage_service.load_dataset(ds_id, db=db, org_id=org_id)
-                if loaded:
-                    df = loaded.get("cleaned_df", loaded.get("raw_df"))
-                    analysis = loaded.get("analysis")
-                    chat_dataset_store[cache_key] = {
-                        "df": df,
-                        "analysis": analysis,
-                        "filename": loaded.get("filename", "active_dataset.csv"),
-                        "dataset_id": ds_id
-                    }
+            loaded = storage_service.load_dataset(ds_id, db=db, org_id=org_id)
+            if loaded:
+                df = loaded.get("cleaned_df", loaded.get("raw_df"))
+                analysis = loaded.get("analysis")
 
     raw_doc_id = payload.get("document_id")
     doc_id = None
@@ -319,34 +324,76 @@ def chat_message(payload: dict = Body(...), db: Session = Depends(get_db), tenan
                         turns.append(f"{role.capitalize()}: {str(content)[:200]}")
                 history_context = "\n".join(turns)
 
-            system_prompt = (
-                "You are an expert enterprise data analytics platform assistant.\n\n"
-                "COMPREHENSIVE ANALYTICAL MANDATE:\n"
-                f"1. You are analyzing the COMPLETE dataset containing ALL {total_rows} rows and {total_cols} columns.\n"
-                f"2. All counts, missing rates, percentages, and averages MUST reflect ALL {total_rows} rows using the EXACT METRICS below.\n"
-                "3. NEVER state or imply that you are using a sample or subset. Always state figures for the ENTIRE dataset.\n"
-                "4. PROVIDE BIG, DETAILED, COMPREHENSIVE OUTPUTS.\n"
-                "5. STRICT NO-ROLE RULE: Do NOT start your response with self-referential role intros (e.g. 'As a Senior Principal Data Analyst AI...', 'Role: ...', 'Task: ...', 'As an AI...'). Jump IMMEDIATELY into the report title or Executive Summary.\n"
-                "6. Structure your response thoroughly with:\n"
-                "   - **Executive Summary & Overview**\n"
-                "   - **Full Detailed Breakdown Tables & Metrics**\n"
-                "   - **Column-by-Column Deep Insights**\n"
-                "   - **Data Quality & Health Observations**\n"
-                "   - **Actionable Remediation Recommendations**\n"
-                "7. Format answers richly using markdown headers (`###`), tables, bullet points, bold key values, and code blocks."
-            )
+            # Determine query intent: GREETING, DETAILED, or CONCISE
+            intent_type = classify_query_intent(message)
 
-            user_prompt = (
-                f"Dataset: **{filename}** | Total Rows: **{total_rows}** | Total Columns: **{total_cols}**\n\n"
-                f"EXACT FULL-DATASET METRICS (Calculated across ALL {total_rows} rows):\n"
-                f"{exact_stats_text}\n\n"
-                f"Overall Quality Score: {quality.get('overall_score', 'N/A')}% | Missing Cells: {missing_count} | Duplicates: {dup_count} | ML Anomalies: {anomaly_count}\n\n"
-                f"Recent Chat History:\n{history_context}\n\n"
-                f"User Question: {message}\n\n"
-                f"Data Sample (First 20 rows):\n```csv\n{sample_preview}\n```\n\n"
-                f"Provide a BIG, DETAILED, COMPREHENSIVE, and IN-DEPTH answer to the user's question using the EXACT FULL-DATASET METRICS across ALL {total_rows} rows. "
-                f"Do NOT include any role intros. Start directly with the Executive Summary."
-            )
+            if intent_type == "GREETING":
+                system_prompt = (
+                    "You are a friendly, intelligent enterprise data analytics AI assistant.\n\n"
+                    "RESPONSE MANDATE FOR GREETINGS:\n"
+                    "1. The user sent a conversational greeting or general request (e.g. 'Hi', 'Hello', 'Help').\n"
+                    "2. Respond warmly, politely, and helpfully in a conversational tone.\n"
+                    f"3. Briefly mention the active dataset name (**{filename}**, {total_rows} rows, {total_cols} columns) and offer 3-4 prompt suggestions on how you can assist.\n"
+                    "4. Do NOT dump dataset statistical tables or raw column metrics for a simple greeting.\n"
+                    "5. STRICT NO-ROLE RULE: Do NOT start your response with self-referential role intros (e.g., 'As an AI...'). Start directly with a warm greeting."
+                )
+
+                user_prompt = (
+                    f"Active Dataset: **{filename}** | Total Rows: **{total_rows}** | Total Columns: **{total_cols}**\n\n"
+                    f"User Message: {message}\n\n"
+                    f"Respond politely to the user's greeting, acknowledge the active dataset, and offer helpful suggestions on how you can assist them with analyzing their dataset."
+                )
+            elif intent_type == "DETAILED":
+                system_prompt = (
+                    "You are an expert enterprise data analytics platform assistant.\n\n"
+                    "RESPONSE LENGTH INSTRUCTION:\n"
+                    "1. The user explicitly requested a BIG, DETAILED, COMPREHENSIVE REPORT.\n"
+                    f"2. You are analyzing the COMPLETE dataset containing ALL {total_rows} rows and {total_cols} columns.\n"
+                    f"3. All counts, missing rates, percentages, and averages MUST reflect ALL {total_rows} rows using the EXACT METRICS below.\n"
+                    "4. Structure your response thoroughly with:\n"
+                    "   - **Executive Summary & Overview**\n"
+                    "   - **Full Detailed Breakdown Tables & Metrics**\n"
+                    "   - **Column-by-Column Deep Insights**\n"
+                    "   - **Data Quality & Health Observations**\n"
+                    "   - **Actionable Remediation Recommendations**\n"
+                    "5. Format answers richly using markdown headers (`###`), tables, bullet points, and bold key values.\n"
+                    "6. STRICT NO-ROLE RULE: Do NOT start your response with self-referential role intros. Jump IMMEDIATELY into the report title or Executive Summary."
+                )
+
+                user_prompt = (
+                    f"Dataset: **{filename}** | Total Rows: **{total_rows}** | Total Columns: **{total_cols}**\n\n"
+                    f"EXACT FULL-DATASET METRICS (Calculated across ALL {total_rows} rows):\n"
+                    f"{exact_stats_text}\n\n"
+                    f"Overall Quality Score: {quality.get('overall_score', 'N/A')}% | Missing Cells: {missing_count} | Duplicates: {dup_count} | ML Anomalies: {anomaly_count}\n\n"
+                    f"Recent Chat History:\n{history_context}\n\n"
+                    f"User Question: {message}\n\n"
+                    f"Data Sample (First 20 rows):\n```csv\n{sample_preview}\n```\n\n"
+                    f"Provide a BIG, DETAILED, COMPREHENSIVE, and IN-DEPTH answer to the user's question using the EXACT FULL-DATASET METRICS across ALL {total_rows} rows. "
+                    f"Do NOT include any role intros. Start directly with the Executive Summary."
+                )
+            else:
+                system_prompt = (
+                    "You are an expert enterprise data analytics platform assistant.\n\n"
+                    "RESPONSE FORMAT & CONTENT MANDATE:\n"
+                    "1. The user asked a specific question. Provide an informative, well-structured, and rich response.\n"
+                    "2. Avoid returning a bare 1-sentence answer. Include clear markdown formatting, bullet points, key metric highlights, or summary tables.\n"
+                    "3. All numbers, column names, and missing counts MUST reflect the EXACT FULL-DATASET METRICS provided below across ALL rows.\n"
+                    "4. Ensure 100% mathematical accuracy. Do NOT add stray asterisks or broken markdown symbols.\n"
+                    "5. Do NOT output unrequested 5-page executive reports unless explicitly asked.\n"
+                    "6. STRICT NO-ROLE RULE: Do NOT start your response with self-referential role intros (e.g., 'As an AI...'). Start directly with the answer title or key content."
+                )
+
+                user_prompt = (
+                    f"Dataset: **{filename}** | Total Rows: **{total_rows}** | Total Columns: **{total_cols}**\n\n"
+                    f"EXACT FULL-DATASET METRICS (Calculated across ALL {total_rows} rows):\n"
+                    f"{exact_stats_text}\n\n"
+                    f"Overall Quality Score: {quality.get('overall_score', 'N/A')}% | Missing Cells: {missing_count} | Duplicates: {dup_count} | ML Anomalies: {anomaly_count}\n\n"
+                    f"Recent Chat History:\n{history_context}\n\n"
+                    f"User Question: {message}\n\n"
+                    f"Data Sample (First 20 rows):\n```csv\n{sample_preview}\n```\n\n"
+                    f"Provide an informative, well-formatted, rich, and accurate answer to the user's question using markdown headers, bullet points, or tables. "
+                    f"Ensure all metrics and calculations match the EXACT FULL-DATASET METRICS across ALL {total_rows} rows."
+                )
 
             llm_response = llm.generate(prompt=user_prompt, system_prompt=system_prompt, temperature=0.1)
             llm_text = llm_response.content.strip() if llm_response.content else ""
@@ -382,7 +429,7 @@ def chat_message(payload: dict = Body(...), db: Session = Depends(get_db), tenan
                     "source": {
                         "filename": filename,
                         "rows_used": f"{total_rows} Rows (100% Complete)",
-                        "confidence_score": 0.99
+                        "confidence_score": 99.0
                     },
                     "verified": True,
                     "resolved_columns": col_names

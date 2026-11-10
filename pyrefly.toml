@@ -1,0 +1,11 @@
+python-interpreter-path = "C:/Program Files/Python311/python.exe"
+
+search-path = [
+    ".",
+    "backend"
+]
+
+site-package-path = [
+    "C:/Users/dharm/AppData/Roaming/Python/Python311/site-packages",
+    "C:/Program Files/Python311/Lib/site-packages"
+]

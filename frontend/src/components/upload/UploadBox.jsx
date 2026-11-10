@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileSpreadsheet, CheckCircle2 } from 'lucide-react';
+import { UploadCloud, FileSpreadsheet, FileText, CheckCircle2 } from 'lucide-react';
 
 const UploadBox = ({ onFileUpload }) => {
   const [dragOver, setDragOver] = useState(false);
@@ -39,14 +39,14 @@ const UploadBox = ({ onFileUpload }) => {
         ref={fileInputRef}
         className="hidden"
         onChange={handleFileChange}
-        accept=".csv,.xlsx,.xls,.parquet"
+        accept=".csv,.xlsx,.xls,.parquet,.pdf"
       />
       <div className="w-14 h-14 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 mb-4 shadow-sm">
         <UploadCloud className="w-7 h-7" />
       </div>
-      <h3 className="text-base font-bold text-gray-900 mb-1">Drag & Drop your dataset file here</h3>
+      <h3 className="text-base font-bold text-gray-900 mb-1">Drag & Drop your dataset or PDF file here</h3>
       <p className="text-xs text-gray-500 max-w-sm mb-4">
-        Supports CSV, XLSX, XLS, and Parquet files up to 100MB for real-time profiling and multi-agent AI analysis.
+        Supports CSV, XLSX, Parquet, and PDF files up to 100MB for real-time profiling, multi-agent analysis, and before/after report generation.
       </p>
 
       <div className="flex items-center gap-2 mb-6 text-xs text-gray-400">
@@ -59,7 +59,11 @@ const UploadBox = ({ onFileUpload }) => {
         <span className="flex items-center gap-1 font-medium bg-gray-100 px-2.5 py-1 rounded-md text-gray-600">
           <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-600" /> .PARQUET
         </span>
+        <span className="flex items-center gap-1 font-medium bg-gray-100 px-2.5 py-1 rounded-md text-gray-600">
+          <FileText className="w-3.5 h-3.5 text-red-600" /> .PDF
+        </span>
       </div>
+
 
       <button
         type="button"
