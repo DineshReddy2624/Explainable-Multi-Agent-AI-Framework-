@@ -1,4 +1,4 @@
-# AI-Powered Data Quality & Profiling Platform
+# Explainable Multi-Agent AI Framework for Intelligent Data Quality Monitoring and Adaptive Auto-Correction
 
 An enterprise-grade, multi-agent AI data quality profiling, monitoring, auto-correction, and RAG-powered data intelligence system.
 
