@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useContext } from 'react';
 import UploadBox from '../components/upload/UploadBox';
 import UploadProgress from '../components/upload/UploadProgress';
+import { DatasetContext } from '../context/DatasetContext';
 import api from '../services/api';
 import {
   MessageSquare,
@@ -20,7 +21,8 @@ import {
   FileText,
   Calculator,
   TrendingUp,
-  CheckCircle2
+  CheckCircle2,
+  Plus
 } from 'lucide-react';
 
 // Rich Markdown Text Formatter like ChatGPT / Claude with Full Table Rendering
@@ -802,20 +804,51 @@ const processClientDatasetQuery = (query, chatAnalysis) => {
 };
 
 const ChatWithDataset = () => {
+  const datasetCtx = useContext(DatasetContext) || {};
   const [chatFile, setChatFile] = useState(null);
-  const [chatAnalysis, setChatAnalysis] = useState(null);
-  const [suggestedQuestions, setSuggestedQuestions] = useState([
-    'How many rows are there?',
-    'What are the column names?',
-    'Show missing values.',
-    'Show duplicate records.',
-    'Generate dataset summary.'
-  ]);
+
+  // Restore analysis from localStorage or active dataset context
+  const [chatAnalysis, setChatAnalysis] = useState(() => {
+    try {
+      const saved = localStorage.getItem('dataset_ai_chat_analysis');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && (parsed.filename || parsed.id)) return parsed;
+      }
+    } catch (e) {
+      console.warn('Failed to load chat analysis from storage:', e);
+    }
+    return null;
+  });
+
+  const [suggestedQuestions, setSuggestedQuestions] = useState(() => {
+    try {
+      const saved = localStorage.getItem('dataset_ai_chat_suggested_questions');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return [
+      'How many rows are there?',
+      'What are the column names?',
+      'Show missing values.',
+      'Show duplicate records.',
+      'Generate dataset summary.'
+    ];
+  });
 
   const [inputMessage, setInputMessage] = useState('');
   const [uploading, setUploading] = useState(false);
   const [chatLoading, setChatLoading] = useState(false);
-  const [showUploadBox, setShowUploadBox] = useState(true);
+  const [showUploadBox, setShowUploadBox] = useState(() => {
+    try {
+      const saved = localStorage.getItem('dataset_ai_chat_analysis');
+      return !saved;
+    } catch (e) {
+      return true;
+    }
+  });
 
   const [streamingMsgIndex, setStreamingMsgIndex] = useState(null);
   const [displayedTextMap, setDisplayedTextMap] = useState({});
@@ -840,20 +873,76 @@ const ChatWithDataset = () => {
     }
   };
 
-  const [messages, setMessages] = useState([
-    {
-      sender: 'assistant',
-      text: 'Hello! I am your Enterprise AI Data Assistant. How can I help you analyze your dataset today?\n\nPlease upload a CSV, XLSX, or Parquet file to begin.',
-      table: null,
-      stats: null,
-      follow_ups: [],
-      source: null,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  // Restore persistent messages from localStorage across page shifts!
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem('dataset_ai_chat_messages');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load saved chat messages from storage:', e);
     }
-  ]);
+    return [
+      {
+        sender: 'assistant',
+        text: 'Hello! I am your Enterprise AI Data Assistant. How can I help you analyze your dataset today?\n\nPlease upload a CSV, XLSX, or Parquet file to begin.',
+        table: null,
+        stats: null,
+        follow_ups: [],
+        source: null,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      }
+    ];
+  });
 
   const [availableDatasets, setAvailableDatasets] = useState([]);
-  const [selectedDatasetId, setSelectedDatasetId] = useState('');
+  const [selectedDatasetId, setSelectedDatasetId] = useState(() => {
+    return localStorage.getItem('dataset_ai_chat_dataset_id') || '';
+  });
+
+  // Sync messages to localStorage whenever messages change
+  useEffect(() => {
+    try {
+      if (messages && messages.length > 0) {
+        localStorage.setItem('dataset_ai_chat_messages', JSON.stringify(messages));
+      }
+    } catch (e) {
+      console.warn('Failed to persist chat messages:', e);
+    }
+  }, [messages]);
+
+  // Sync chatAnalysis to localStorage whenever it updates
+  useEffect(() => {
+    try {
+      if (chatAnalysis) {
+        localStorage.setItem('dataset_ai_chat_analysis', JSON.stringify(chatAnalysis));
+      } else {
+        localStorage.removeItem('dataset_ai_chat_analysis');
+      }
+    } catch (e) {
+      console.warn('Failed to persist chat analysis:', e);
+    }
+  }, [chatAnalysis]);
+
+  // Sync selectedDatasetId to localStorage
+  useEffect(() => {
+    if (selectedDatasetId) {
+      localStorage.setItem('dataset_ai_chat_dataset_id', String(selectedDatasetId));
+    }
+  }, [selectedDatasetId]);
+
+  // Sync suggestedQuestions to localStorage
+  useEffect(() => {
+    try {
+      if (suggestedQuestions && suggestedQuestions.length > 0) {
+        localStorage.setItem('dataset_ai_chat_suggested_questions', JSON.stringify(suggestedQuestions));
+      }
+    } catch (e) {}
+  }, [suggestedQuestions]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -870,21 +959,48 @@ const ChatWithDataset = () => {
         const list = res.data.data || res.data || [];
         if (Array.isArray(list) && list.length > 0) {
           setAvailableDatasets(list);
+
+          // If no active chatAnalysis is stored, initialize from context or the first available dataset
           if (!chatAnalysis) {
-            const firstDs = list[0];
-            setSelectedDatasetId(firstDs.id);
-            setChatAnalysis({
-              dataset_id: firstDs.id,
-              id: firstDs.id,
-              filename: firstDs.filename,
-              total_rows: firstDs.total_rows || firstDs.stats_summary?.total_rows || 500,
-              total_cols: firstDs.total_cols || firstDs.stats_summary?.total_cols || 8,
-              headers: firstDs.column_names || firstDs.stats_summary?.headers || [],
-              missing_report: firstDs.stats_summary?.missing_report || [],
-              total_missing_cells: firstDs.stats_summary?.total_missing_cells || 0,
-              duplicate_count: firstDs.stats_summary?.duplicate_count || 0
-            });
-            setShowUploadBox(false);
+            let targetDs = null;
+            if (datasetCtx.filename) {
+              targetDs = list.find(d => d.filename === datasetCtx.filename);
+            }
+            if (!targetDs) {
+              targetDs = list[0];
+            }
+
+            if (targetDs) {
+              setSelectedDatasetId(targetDs.id);
+              const initialAnalysis = {
+                dataset_id: targetDs.id,
+                id: targetDs.id,
+                filename: targetDs.filename,
+                total_rows: targetDs.total_rows || targetDs.stats_summary?.total_rows || 500,
+                total_cols: targetDs.total_cols || targetDs.stats_summary?.total_cols || 8,
+                headers: targetDs.column_names || targetDs.stats_summary?.headers || [],
+                missing_report: targetDs.stats_summary?.missing_report || [],
+                total_missing_cells: targetDs.stats_summary?.total_missing_cells || 0,
+                duplicate_count: targetDs.stats_summary?.duplicate_count || 0
+              };
+              setChatAnalysis(initialAnalysis);
+              setShowUploadBox(false);
+
+              // Only set initial welcome message if no prior chat history was saved
+              const savedMsgs = localStorage.getItem('dataset_ai_chat_messages');
+              if (!savedMsgs) {
+                const dsWelcome = {
+                  sender: 'assistant',
+                  text: `Loaded active dataset **'${targetDs.filename}'** (${(targetDs.total_rows || 500).toLocaleString()} rows, ${(targetDs.total_cols || 8)} columns).\n\nAsk anything about statistical distributions, anomalies, missing values, or dataset summaries.`,
+                  table: null,
+                  stats: null,
+                  follow_ups: ['How many rows are there?', 'What are the column names?', 'Show missing values.'],
+                  source: null,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                };
+                setMessages([dsWelcome]);
+              }
+            }
           }
         }
       } catch (err) {
@@ -893,6 +1009,31 @@ const ChatWithDataset = () => {
     };
     fetchDatasets();
   }, []);
+
+  // Establish a new chat session explicitly
+  const handleStartNewChat = () => {
+    localStorage.removeItem('dataset_ai_chat_messages');
+    setDisplayedTextMap({});
+    setStreamingMsgIndex(null);
+    setInputMessage('');
+
+    const welcomeMsgText = chatAnalysis
+      ? `Started a new chat session for **'${chatAnalysis.filename}'** (${(chatAnalysis.total_rows || 500).toLocaleString()} rows).\n\nAsk anything about statistical distributions, anomalies, missing values, or dataset summaries.`
+      : 'Hello! I am your Enterprise AI Data Assistant. How can I help you analyze your dataset today?\n\nPlease upload a CSV, XLSX, or Parquet file to begin.';
+
+    const newWelcomeMsg = {
+      sender: 'assistant',
+      text: welcomeMsgText,
+      table: null,
+      stats: null,
+      follow_ups: ['How many rows are there?', 'What are the column names?', 'Show missing values.', 'Show duplicate records.'],
+      source: null,
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    };
+
+    setMessages([newWelcomeMsg]);
+    triggerWordByWordStreaming(0, welcomeMsgText);
+  };
 
   const handleSelectDataset = (dsId) => {
     const targetId = parseInt(dsId, 10);
@@ -912,6 +1053,7 @@ const ChatWithDataset = () => {
       };
       setChatAnalysis(newAnalysis);
 
+      // Establish new chat session for this selected dataset
       const welcomeMsgText = `Selected active dataset **'${found.filename}'** (${(found.total_rows || 500).toLocaleString()} rows).\n\nAsk anything about statistical distributions, anomalies, missing values, or dataset summaries.`;
       const welcomeMsg = {
         sender: 'assistant',
@@ -1238,8 +1380,24 @@ const ChatWithDataset = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
-          {chatAnalysis && (
+        <div className="flex items-center gap-3 shrink-0 flex-wrap sm:flex-nowrap">
+          {availableDatasets.length > 1 ? (
+            <div className="flex items-center gap-2 bg-slate-800/90 border border-indigo-500/30 rounded-xl px-3 py-1.5 shadow-inner">
+              <Database className="w-4 h-4 text-indigo-400 shrink-0" />
+              <select
+                value={selectedDatasetId || chatAnalysis?.id || chatAnalysis?.dataset_id || ''}
+                onChange={(e) => handleSelectDataset(e.target.value)}
+                className="bg-transparent text-xs font-bold text-white font-mono tracking-tight focus:outline-none cursor-pointer pr-1"
+                title="Select active dataset for chat"
+              >
+                {availableDatasets.map((ds) => (
+                  <option key={ds.id} value={ds.id} className="bg-slate-900 text-white font-mono">
+                    {ds.filename} ({(ds.total_rows || 500).toLocaleString()} rows)
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : chatAnalysis ? (
             <div className="flex items-center gap-2.5 bg-slate-800/90 border border-indigo-500/30 rounded-xl px-3.5 py-2 shadow-inner">
               <Database className="w-4 h-4 text-indigo-400 shrink-0" />
               <span className="text-xs font-bold text-white font-mono tracking-tight">
@@ -1249,7 +1407,16 @@ const ChatWithDataset = () => {
                 {chatAnalysis.total_rows?.toLocaleString() || 500} rows
               </span>
             </div>
-          )}
+          ) : null}
+
+          <button
+            onClick={handleStartNewChat}
+            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700/90 border border-slate-700 hover:border-indigo-400/50 text-slate-200 hover:text-white font-semibold text-xs shadow-md transition-all flex items-center gap-1.5 shrink-0 cursor-pointer"
+            title="Start a new chat session"
+          >
+            <Plus className="w-3.5 h-3.5 text-indigo-400" />
+            <span>New Chat</span>
+          </button>
 
           <button
             onClick={handleUploadNewClick}
