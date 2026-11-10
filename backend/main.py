@@ -128,6 +128,8 @@ async def global_unhandled_exception_handler(request: Request, exc: Exception):
 
 # Include Routers
 app.include_router(auth.router, prefix=f"{settings.API_V1_STR}/auth", tags=["Auth"])
+app.include_router(auth.router, prefix="/api/auth", tags=["Auth Compatibility"])
+app.include_router(auth.router, prefix="/auth", tags=["Auth Direct"])
 app.include_router(upload.router, prefix=f"{settings.API_V1_STR}/upload", tags=["Upload"])
 app.include_router(profiling.router, prefix=f"{settings.API_V1_STR}/profiling", tags=["Profiling"])
 app.include_router(issues.router, prefix=f"{settings.API_V1_STR}/issues", tags=["Issues"])
@@ -154,6 +156,7 @@ def root():
     return {"message": "Explainable Multi-Agent AI Data Quality Platform API", "environment": settings.ENVIRONMENT}
 
 @app.get("/health")
+@app.get("/api/health")
 def health_check():
     return {"status": "ok", "environment": settings.ENVIRONMENT, "version": "1.0.0"}
 

@@ -9,6 +9,7 @@ import logging
 import requests
 from fastapi import APIRouter, HTTPException, Depends, Body, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from schemas.auth import UserLogin, UserRegister, Token, ForgotPasswordRequest, ResetPasswordRequest
 from core.database import get_db
@@ -426,10 +427,17 @@ def verify_oauth_token(payload: dict = Body(...), db: Session = Depends(get_db))
             auth_provider="google",
             is_active=True
         )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        log_audit_event("USER_GOOGLE_REGISTER", org_id=org_id, user_id=user.id, details={"google_id": google_id}, db=db)
+        try:
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            log_audit_event("USER_GOOGLE_REGISTER", org_id=org_id, user_id=user.id, details={"google_id": google_id}, db=db)
+        except IntegrityError:
+            db.rollback()
+            # Fetch user concurrently inserted
+            user = db.query(User).filter((User.email == email) | (User.username == username)).first()
+            if not user:
+                raise
 
     if not user.is_active:
         raise HTTPException(status_code=401, detail="User account is deactivated.")
